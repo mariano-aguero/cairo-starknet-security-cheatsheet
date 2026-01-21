@@ -1,0 +1,1127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cairo Security Cheatsheet</title>
+    <meta name="description" content="Comprehensive security guide for Cairo and Starknet smart contract development.">
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Highlight.js -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>
+        hljs.registerLanguage('cairo', function(hljs) {
+            return {
+                name: 'Cairo',
+                aliases: ['cairo'],
+                keywords: {
+                    keyword: 'fn struct enum type impl trait use mod pub let mut match if else loop return break continue as async await static where const extern reference',
+                    built_in: 'felt252 u8 u16 u32 u64 u128 u256 i8 i16 i32 i64 i128 bool ContractAddress ClassHash StorageAddress',
+                    literal: 'true false None Some'
+                },
+                contains: [
+                    hljs.C_LINE_COMMENT_MODE,
+                    hljs.C_BLOCK_COMMENT_MODE,
+                    hljs.QUOTE_STRING_MODE,
+                    { className: 'meta', begin: '#\\[', end: '\\]' },
+                    { className: 'number', begin: '\\b(0x[0-9a-fA-F]+|[0-9]+)\\b' }
+                ]
+            };
+        });
+
+        const OVERVIEW = {
+            id: "getting-started",
+            title: "Getting Started",
+            subtitle: "Security mindset in Starknet",
+            description: "Cairo 1 is a Rust-inspired, strongly-typed language for writing Starknet smart contracts. While its design prevents many classes of errors common in other environments (like EVM's unchecked arithmetic), developers must still be aware of Starknet-specific architecture and Cairo's unique memory model to build secure applications.",
+            points: [
+                "<strong>Zero-knowledge proofs:</strong> Cairo is designed to generate STARK proofs for execution correctness.",
+                "<strong>Linear memory:</strong> Memory in Cairo is immutable; variables can be reassigned but the underlying memory slots cannot.",
+                "<strong>Sierra:</strong> A safe intermediate representation that ensures every transaction is provable, even if it reverts."
+            ]
+        };
+
+        const VULNERABILITIES = [
+            {
+                id: "overflow",
+                number: "01",
+                title: "Underflow & Overflow",
+                subtitle: "Arithmetic out-of-bounds in felts and integer types",
+                severity: "high",
+                description: "In Cairo 1, integer types (u8 to u256) have native overflow protection and will panic on out-of-bounds operations. However, the base type 'felt252' uses modular arithmetic (Modulo P). Using felts for business logic can lead to unexpected wrap-around behavior.",
+                impact: "Incorrect balance calculations, logic bypasses, and potential loss of funds.",
+                examples: [
+                    {
+                        label: "❌ VULNERABLE",
+                        language: "cairo",
+                        code: "fn insecure_transfer(amount: felt252, balance: felt252) -> felt252 {\n    // If amount > balance, this does not panic.\n    // It wraps around due to felt252 modular arithmetic.\n    balance - amount\n}"
+                    },
+                    {
+                        label: "✅ SECURE",
+                        language: "cairo",
+                        code: "fn secure_transfer(amount: u256, balance: u256) -> u256 {\n    // Cairo 1 automatically panics if amount > balance\n    balance - amount\n}"
+                    }
+                ]
+            },
+            {
+                id: "access-control",
+                number: "02",
+                title: "Inadequate Access Control",
+                subtitle: "Unprotected administrative functions",
+                severity: "critical",
+                description: "Failure to restrict sensitive functions to authorized users allows attackers to modify configurations, steal funds, or destroy the contract via syscalls like replace_class_syscall.",
+                examples: [
+                    {
+                        label: "❌ VULNERABLE",
+                        language: "cairo",
+                        code: "#[external(v0)]\nfn upgrade_contract(ref self: ContractState, new_class_hash: ClassHash) {\n    // Anyone can upgrade the contract class!\n    starknet::replace_class_syscall(new_class_hash).unwrap();\n}"
+                    },
+                    {
+                        label: "✅ SECURE",
+                        language: "cairo",
+                        code: "#[external(v0)]\nfn upgrade_contract(ref self: ContractState, new_class_hash: ClassHash) {\n    self.ownable.assert_only_owner();\n    starknet::replace_class_syscall(new_class_hash).unwrap();\n}"
+                    }
+                ]
+            },
+            {
+                id: "reentrancy",
+                number: "03",
+                title: "Reentrancy",
+                subtitle: "External calls allowing malicious recursion",
+                severity: "high",
+                description: "While Starknet's execution model is synchronous, external calls to other contracts can still allow reentrancy attacks if the state is not updated before the call (breaking the Checks-Effects-Interactions pattern).",
+                examples: [
+                    {
+                        label: "❌ VULNERABLE",
+                        language: "cairo",
+                        code: "fn withdraw(ref self: ContractState, amount: u256) {\n    let caller = get_caller_address();\n    let balance = self.balances.read(caller);\n    assert(balance >= amount, 'Insufficient balance');\n\n    let dispatcher = IERC20Dispatcher { contract_address: self.token.read() };\n    dispatcher.transfer(caller, amount);\n\n    self.balances.write(caller, balance - amount);\n}"
+                    },
+                    {
+                        label: "✅ SECURE (CEI Pattern)",
+                        language: "cairo",
+                        code: "fn withdraw(ref self: ContractState, amount: u256) {\n    let caller = get_caller_address();\n    let balance = self.balances.read(caller);\n    assert(balance >= amount, 'Insufficient balance');\n\n    // Update state first!\n    self.balances.write(caller, balance - amount);\n\n    let dispatcher = IERC20Dispatcher { contract_address: self.token.read() };\n    dispatcher.transfer(caller, amount);\n}"
+                    }
+                ]
+            },
+            {
+                id: "messaging",
+                number: "04",
+                title: "Insecure L1-L2 Messaging",
+                subtitle: "Blind trust in Ethereum-originating messages",
+                severity: "critical",
+                description: "When receiving messages from L1 (Ethereum) via an l1_handler, it is mandatory to validate that the 'from_address' matches the expected L1 contract. Otherwise, any L1 user can trigger the handler.",
+                examples: [
+                    {
+                        label: "❌ VULNERABLE",
+                        language: "cairo",
+                        code: "#[l1_handler]\nfn process_deposit(ref self: ContractState, from_address: felt252, amount: u256) {\n    // No validation of the L1 sender!\n    let user = ...;\n    self.balances.write(user, self.balances.read(user) + amount);\n}"
+                    },
+                    {
+                        label: "✅ SECURE",
+                        language: "cairo",
+                        code: "#[l1_handler]\nfn process_deposit(ref self: ContractState, from_address: felt252, amount: u256) {\n    let expected_l1_address = self.l1_bridge_address.read();\n    assert(from_address == expected_l1_address, 'Invalid L1 sender');\n    // Process deposit...\n}"
+                    }
+                ]
+            },
+            {
+                id: "initializers",
+                number: "05",
+                title: "Unprotected Initializers",
+                subtitle: "Risk in proxy and upgradeable patterns",
+                severity: "critical",
+                description: "In proxy patterns, contracts often use an 'initializer' function instead of a constructor. If not protected, an attacker can call it to take ownership of the contract.",
+                examples: [
+                    {
+                        label: "❌ VULNERABLE",
+                        language: "cairo",
+                        code: "#[external(v0)]\nfn initialize(ref self: ContractState, admin: ContractAddress) {\n    // Can be called multiple times!\n    self.admin.write(admin);\n}"
+                    },
+                    {
+                        label: "✅ SECURE",
+                        language: "cairo",
+                        code: "#[external(v0)]\nfn initialize(ref self: ContractState, admin: ContractAddress) {\n    assert(self.admin.read().is_zero(), 'Already initialized');\n    self.admin.write(admin);\n}"
+                    }
+                ]
+            },
+            {
+                id: "constructor-caller",
+                number: "06",
+                title: "Constructor Caller Address",
+                subtitle: "get_caller_address() returns 0 in constructors",
+                severity: "medium",
+                description: "In Starknet, during contract deployment (constructor execution), `get_caller_address()` returns `0`. If you rely on it to set an owner or admin, you will lock the contract.",
+                impact: "Broken access control, permanent loss of administrative privileges.",
+                examples: [
+                    {
+                        label: "❌ VULNERABLE",
+                        language: "cairo",
+                        code: "#[constructor]\nfn constructor(ref self: ContractState) {\n    // This sets admin to address 0!\n    self.admin.write(get_caller_address());\n}"
+                    },
+                    {
+                        label: "✅ SECURE",
+                        language: "cairo",
+                        code: "#[constructor]\nfn constructor(ref self: ContractState, admin: ContractAddress) {\n    // Explicitly pass the admin address\n    self.admin.write(admin);\n}"
+                    }
+                ]
+            },
+            {
+                id: "integer-division",
+                number: "07",
+                title: "Integer Division & Precision",
+                subtitle: "Rounding down in arithmetic operations",
+                severity: "medium",
+                description: "Integer division in Cairo (as in most smart contract languages) rounds down to the nearest integer. Performing multiplication after division can lead to significant precision loss.",
+                impact: "Incorrect financial calculations, under-distributed rewards.",
+                examples: [
+                    {
+                        label: "❌ VULNERABLE",
+                        language: "cairo",
+                        code: "fn calculate_reward(amount: u256, rate: u256) -> u256 {\n    // If amount is small, (amount / 100) becomes 0\n    (amount / 100) * rate\n}"
+                    },
+                    {
+                        label: "✅ SECURE",
+                        language: "cairo",
+                        code: "fn calculate_reward(amount: u256, rate: u256) -> u256 {\n    // Multiply first to maintain precision\n    (amount * rate) / 100\n}"
+                    }
+                ]
+            },
+            {
+                id: "missing-events",
+                number: "08",
+                title: "Missing Event Emission",
+                subtitle: "Lack of off-chain visibility for critical actions",
+                severity: "low",
+                description: "Critical state changes (ownership transfers, configuration updates, large fund movements) should emit events to allow indexers and UIs to track contract state reliably.",
+                impact: "Difficulties in auditing, broken UI updates, lack of transparency.",
+                examples: [
+                    {
+                        label: "❌ VULNERABLE",
+                        language: "cairo",
+                        code: "fn set_fees(ref self: ContractState, new_fees: u256) {\n    self.ownable.assert_only_owner();\n    self.fees.write(new_fees);\n    // No event emitted!\n}"
+                    },
+                    {
+                        label: "✅ SECURE",
+                        language: "cairo",
+                        code: "fn set_fees(ref self: ContractState, new_fees: u256) {\n    self.ownable.assert_only_owner();\n    self.fees.write(new_fees);\n    self.emit(FeesUpdated { new_fees });\n}"
+                    }
+                ]
+            },
+            {
+                id: "external-calls-loops",
+                number: "09",
+                title: "External Calls in Loops",
+                subtitle: "Denial of Service (DoS) risks",
+                severity: "medium",
+                description: "Executing external calls inside a loop whose size can be controlled or grows over time can lead to transaction failure due to step limits or gas exhaustion. If one call fails, the entire transaction reverts.",
+                impact: "Contract lockup, inability to process payments or critical logic.",
+                examples: [
+                    {
+                        label: "❌ VULNERABLE",
+                        language: "cairo",
+                        code: "fn distribute_rewards(ref self: ContractState, users: Array<ContractAddress>) {\n    let mut i = 0;\n    loop {\n        if i >= users.len() { break; }\n        let user = *users.at(i);\n        // External call to another contract in a loop\n        let dispatcher = IERC20Dispatcher { contract_address: self.token.read() };\n        dispatcher.transfer(user, 100);\n        i += 1;\n    };\n}"
+                    },
+                    {
+                        label: "✅ SECURE (Pull Pattern)",
+                        language: "cairo",
+                        code: "fn claim_reward(ref self: ContractState) {\n    let user = get_caller_address();\n    let reward = self.rewards.read(user);\n    assert(reward > 0, 'No reward to claim');\n    \n    self.rewards.write(user, 0);\n    let dispatcher = IERC20Dispatcher { contract_address: self.token.read() };\n    dispatcher.transfer(user, reward);\n}"
+                    }
+                ]
+            },
+            {
+                id: "felt-comparisons",
+                number: "10",
+                title: "Felt252 Comparisons",
+                subtitle: "Unexpected results with signed logic",
+                severity: "low",
+                description: "The felt252 type is unsigned in nature but represents elements in a prime field. When comparing felts with operators like < or >, Cairo treats them as large positive integers. This can lead to logic errors if the developer assumes signed-like behavior.",
+                impact: "Incorrect validation logic, especially in threshold checks.",
+                examples: [
+                    {
+                        label: "⚠️ CAUTION",
+                        language: "cairo",
+                        code: "// Comparing felts\nlet a: felt252 = 1;\nlet b: felt252 = -1; // This becomes P - 1 (a very large number)\n\nif a < b {\n    // This branch IS taken because b is a massive integer\n}"
+                    },
+                    {
+                        label: "✅ SECURE",
+                        language: "cairo",
+                        code: "// Use explicit integer types for range comparisons\nlet a: u256 = 1;\nlet b: u256 = 100;\n\nif a < b {\n    // Works as expected\n}"
+                    }
+                ]
+            },
+            {
+                id: "account-abstraction",
+                number: "11",
+                title: "Insecure Account Validation",
+                subtitle: "Risks in Native Account Abstraction",
+                severity: "critical",
+                description: "Starknet uses native Account Abstraction. Custom account contracts must validate the signature in __validate__ and __validate_declare__. Failure to properly validate the caller or the signature allows anyone to impersonate the account and execute arbitrary transactions.",
+                impact: "Full account takeover and loss of all managed funds.",
+                examples: [
+                    {
+                        label: "❌ VULNERABLE",
+                        language: "cairo",
+                        code: "fn __validate__(ref self: ContractState, calls: Array<Call>) -> felt252 {\n    // No signature validation!\n    // Anyone can call __execute__ if this returns VALID\n    starknet::VALID\n}"
+                    },
+                    {
+                        label: "✅ SECURE",
+                        language: "cairo",
+                        code: "fn __validate__(ref self: ContractState, calls: Array<Call>) -> felt252 {\n    let tx_info = get_tx_info().unbox();\n    let signature = tx_info.signature;\n    \n    let is_valid = self.validate_signature(tx_info.transaction_hash, signature);\n    assert(is_valid, 'Invalid signature');\n    \n    starknet::VALID\n}"
+                    }
+                ]
+            },
+            {
+                id: "storage-collision",
+                number: "12",
+                title: "Component Storage Collision",
+                subtitle: "Overlapping storage in complex contracts",
+                severity: "high",
+                description: "When using the Cairo 1 component system, ensure that different components do not accidentally use overlapping storage areas. While the compiler and OpenZeppelin's patterns mitigate this, manual storage management or incorrect component integration can lead to state corruption.",
+                impact: "State corruption, unintended data modification, and logic bypasses.",
+                examples: [
+                    {
+                        label: "⚠️ CAUTION",
+                        language: "cairo",
+                        code: "// Ensure proper namespacing in storage\n#[storage]\nstruct Storage {\n    // Components should have their own isolated storage segments\n    #[substorage(v0)]\n    ownable: ownable_component::Storage,\n    #[substorage(v0)]\n    upgradeable: upgradeable_component::Storage,\n    \n    // Contract-specific storage\n    my_value: u256\n}"
+                    }
+                ]
+            },
+            {
+                id: "unchecked-upgrade",
+                number: "13",
+                title: "Unchecked Class Hash Upgrades",
+                subtitle: "Malicious or incompatible class hash replacement",
+                severity: "high",
+                description: "Using replace_class_syscall allows a contract to change its logic. If the new class hash is not validated against a whitelist or doesn't follow the same storage layout, the contract can be bricked or taken over.",
+                impact: "Loss of contract functionality, state corruption, or complete takeover.",
+                examples: [
+                    {
+                        label: "❌ VULNERABLE",
+                        language: "cairo",
+                        code: "fn upgrade(ref self: ContractState, new_class_hash: ClassHash) {\n    self.ownable.assert_only_owner();\n    // Blindly upgrading to any class hash!\n    starknet::replace_class_syscall(new_class_hash).unwrap();\n}"
+                    },
+                    {
+                        label: "✅ SECURE",
+                        language: "cairo",
+                        code: "fn upgrade(ref self: ContractState, new_class_hash: ClassHash) {\n    self.ownable.assert_only_owner();\n    assert(!new_class_hash.is_zero(), 'Class hash cannot be zero');\n    // Implement a governance delay or a whitelist check\n    assert(self.is_whitelisted(new_class_hash), 'Class hash not whitelisted');\n    starknet::replace_class_syscall(new_class_hash).unwrap();\n}"
+                    }
+                ]
+            },
+            {
+                id: "predictable-salt",
+                number: "14",
+                title: "Predictable Salt & Frontrunning",
+                subtitle: "Contract deployment manipulation",
+                severity: "low",
+                description: "When deploying contracts via deploy_syscall, using a predictable salt (like a simple counter or a known value) can allow attackers to frontrun the deployment or predict the contract address, potentially leading to 'address squatting'.",
+                impact: "Gaining control over a contract address before the intended deployer.",
+                examples: [
+                    {
+                        label: "⚠️ CAUTION",
+                        language: "cairo",
+                        code: "fn deploy_child(ref self: ContractState, salt: felt252) {\n    // If salt is just 1, 2, 3... it's easily predictable\n    let (addr, _) = starknet::deploy_syscall(\n        self.child_class_hash.read(), salt, calldata.span(), false\n    ).unwrap();\n}"
+                    },
+                    {
+                        label: "✅ SECURE",
+                        language: "cairo",
+                        code: "fn deploy_child(ref self: ContractState, salt: felt252) {\n    // Mix salt with caller address or other unique data\n    let unique_salt = pedersen(get_caller_address().into(), salt);\n    let (addr, _) = starknet::deploy_syscall(\n        self.child_class_hash.read(), unique_salt, calldata.span(), false\n    ).unwrap();\n}"
+                    }
+                ]
+            }
+        ];
+
+        const PATTERNS = [
+            {
+                id: "pattern-cei",
+                title: "Checks-Effects-Interactions",
+                description: "The Checks-Effects-Interactions (CEI) pattern is a fundamental security practice to prevent reentrancy attacks. Always validate all conditions (Checks) first, then update the internal contract state (Effects), and only then perform external calls or interactions with other contracts (Interactions). In Cairo 1, this remains critical even with its synchronous execution model to maintain state consistency."
+            },
+            {
+                id: "pattern-access",
+                title: "Standard Access Control",
+                description: "Implement robust access control using standardized and audited components. Instead of manual address checks, use OpenZeppelin's Ownable or AccessControl. This ensures that sensitive functions like upgrading contracts, changing critical parameters, or withdrawing fees are strictly restricted to authorized roles, preventing unauthorized administrative actions."
+            },
+            {
+                id: "pattern-components",
+                title: "OpenZeppelin Components",
+                description: "Leverage the power of the Cairo 1 component system to integrate battle-tested security logic into your contracts. By using OpenZeppelin's library, you can easily add support for common standards (ERC20, ERC721) and security modules (ReentrancyGuard, Pausable) without reinventing the wheel, significantly reducing the attack surface of your code."
+            },
+            {
+                id: "pattern-assert",
+                title: "Strict Assertions",
+                description: "Use `assert` and `panic` strategically to enforce invariants and validate business logic throughout execution. In Cairo 1, providing clear, descriptive error messages in your assertions not only helps with debugging but also ensures that any invalid state transition results in an immediate and safe revert, protecting the contract's integrity."
+            },
+            {
+                id: "pattern-events",
+                title: "Event-Driven State",
+                description: "Emit events for every critical state change to ensure transparency and off-chain synchronicity. Events are the primary way for indexers, frontends, and auditors to track contract activity. A secure contract should provide enough information through its events to reconstruct its state changes without needing to trace every transaction's internal execution."
+            },
+            {
+                id: "pattern-resource",
+                title: "Resource & Step Optimization",
+                description: "Starknet transactions have limits on computational 'steps' and builtins. Optimize your Cairo code to avoid unnecessary loops or heavy operations that could cause transactions to hit resource limits. Using efficient data structures and avoiding redundant syscalls is key to maintaining contract availability and lowering user costs."
+            },
+            {
+                id: "pattern-pull",
+                title: "Pull-over-Push Payments",
+                description: "Favor 'pull' over 'push' for fund distributions. Instead of sending tokens to multiple users in a single transaction (which can fail due to gas limits or malicious recipients), allow users to withdraw their own funds individually. This shifts the gas cost to the user and ensures that one failing transfer doesn't block others."
+            }
+        ];
+
+        const TOOLS = [
+            {
+                name: "Scarb",
+                url: "https://docs.swmansion.com/scarb/",
+                description: "The build toolchain and package manager for Cairo and Starknet."
+            },
+            {
+                name: "Starknet Foundry",
+                url: "https://foundry-rs.github.io/starknet-foundry/",
+                description: "A lightning-fast toolkit for Starknet contract development and testing."
+            },
+            {
+                name: "Caracal",
+                url: "https://github.com/crytic/caracal",
+                description: "Static analyzer for Starknet smart contracts."
+            },
+            {
+                name: "Starknet-compile",
+                url: "https://github.com/starkware-libs/cairo",
+                description: "The official Cairo compiler, essential for verifying bytecode and Sierra output."
+            }
+        ];
+    </script>
+
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-secondary: #111827;
+            --bg-tertiary: #1a2332;
+            --bg-code: #0d1117;
+            --accent-primary: #00d4ff;
+            --accent-secondary: #00ff88;
+            --accent-warning: #ff6b35;
+            --accent-danger: #ff3860;
+            --accent-purple: #a855f7;
+            --text-primary: #e4e8ef;
+            --text-secondary: #8b949e;
+            --text-muted: #5c6370;
+            --border-color: #21293a;
+            --border-glow: rgba(0, 212, 255, 0.3);
+            --gradient-main: linear-gradient(135deg, #00d4ff 0%, #00ff88 100%);
+            --shadow-glow: 0 0 40px rgba(0, 212, 255, 0.15);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+            scroll-padding-top: 80px;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.7;
+            min-height: 100vh;
+        }
+
+        /* Animated background grid */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image:
+                linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        /* Header */
+        header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 70px;
+            background: rgba(10, 14, 23, 0.9);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border-color);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 2rem;
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 700;
+            font-size: 1.25rem;
+            text-decoration: none;
+            color: var(--text-primary);
+        }
+
+        .logo-icon {
+            width: 36px;
+            height: 36px;
+            background: var(--gradient-main);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            color: var(--bg-primary);
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            flex: 1;
+            justify-content: flex-end;
+        }
+
+        .main-nav {
+            display: flex;
+            gap: 2rem;
+            margin-left: 3rem;
+        }
+
+        .main-nav a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .main-nav a:hover {
+            color: var(--accent-primary);
+        }
+
+        .container {
+            display: flex;
+            max-width: 1440px;
+            margin: 70px auto 0;
+            padding: 2rem;
+            gap: 3rem;
+        }
+
+        /* Sidebar */
+        aside {
+            width: 280px;
+            position: sticky;
+            top: 100px;
+            height: calc(100vh - 120px);
+            overflow-y: auto;
+            padding-right: 1.5rem;
+            flex-shrink: 0;
+        }
+
+        aside::-webkit-scrollbar {
+            width: 4px;
+        }
+        aside::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 10px;
+        }
+
+        .nav-section {
+            margin-bottom: 2.5rem;
+        }
+
+        .nav-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+            font-weight: 700;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            padding: 0.6rem 0.8rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+            margin-bottom: 2px;
+        }
+
+        .nav-link:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .nav-link.active {
+            color: var(--accent-primary);
+            background: rgba(0, 212, 255, 0.1);
+            font-weight: 600;
+        }
+
+        /* Main Content */
+        main {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .hero {
+            padding: 4rem 0 6rem;
+            text-align: center;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 212, 255, 0.1);
+            color: var(--accent-primary);
+            padding: 0.5rem 1rem;
+            border-radius: 100px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 2rem;
+            border: 1px solid rgba(0, 212, 255, 0.2);
+        }
+
+        .hero h1 {
+            font-size: 4.5rem;
+            line-height: 1.1;
+            font-weight: 800;
+            margin-bottom: 1.5rem;
+            letter-spacing: -0.02em;
+        }
+
+        .gradient {
+            background: var(--gradient-main);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero p {
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            max-width: 700px;
+            margin: 0 auto 3rem;
+        }
+
+        .hero-stats {
+            display: flex;
+            justify-content: center;
+            gap: 4rem;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 800;
+            color: var(--text-primary);
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        /* Cards */
+        .section-header {
+            margin: 4rem 0 2rem;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .section-header h2 {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 2.5rem;
+            margin-bottom: 2rem;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card:hover {
+            border-color: var(--accent-primary);
+            box-shadow: var(--shadow-glow);
+            transform: translateY(-4px);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 2rem;
+        }
+
+        .card-number {
+            width: 40px;
+            height: 40px;
+            background: var(--bg-tertiary);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            color: var(--accent-primary);
+            margin-bottom: 1rem;
+        }
+
+        .severity {
+            padding: 0.4rem 0.8rem;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .severity-critical { background: rgba(255, 56, 96, 0.1); color: var(--accent-danger); border: 1px solid rgba(255, 56, 96, 0.2); }
+        .severity-high { background: rgba(255, 107, 53, 0.1); color: var(--accent-warning); border: 1px solid rgba(255, 107, 53, 0.2); }
+        .severity-medium { background: rgba(168, 85, 247, 0.1); color: var(--accent-purple); border: 1px solid rgba(168, 85, 247, 0.2); }
+        .severity-low { background: rgba(0, 255, 136, 0.1); color: var(--accent-secondary); border: 1px solid rgba(0, 255, 136, 0.2); }
+
+        .card h3 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .impact-box {
+            background: var(--bg-tertiary);
+            border-left: 4px solid var(--accent-primary);
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            margin: 1.5rem 0;
+            font-size: 0.95rem;
+        }
+
+        /* Code Blocks */
+        .code-container {
+            margin-top: 2rem;
+            display: grid;
+            gap: 1.5rem;
+        }
+
+        .code-block {
+            background: var(--bg-code);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .code-header {
+            padding: 0.75rem 1.25rem;
+            background: rgba(255, 255, 255, 0.03);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .code-label {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .label-vulnerable { color: var(--accent-danger); }
+        .label-secure { color: var(--accent-secondary); }
+
+        pre {
+            padding: 1.25rem;
+            margin: 0;
+            overflow-x: auto;
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        /* Footer */
+        footer {
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+            padding: 4rem 2rem;
+            margin-top: 6rem;
+        }
+
+        .footer-content {
+            max-width: 1440px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 3rem;
+        }
+
+        .footer-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .footer-links a:hover {
+            color: var(--accent-primary);
+        }
+
+        /* Back to top button */
+        #back-to-top {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 50px;
+            height: 50px;
+            background: var(--gradient-main);
+            color: var(--bg-primary);
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            box-shadow: 0 4px 15px rgba(0, 212, 255, 0.4);
+            z-index: 1000;
+            transition: all 0.3s ease;
+        }
+
+        #back-to-top:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 20px rgba(0, 212, 255, 0.6);
+        }
+
+        @media (max-width: 1024px) {
+            .container { flex-direction: column; }
+            aside { width: 100%; position: relative; top: 0; height: auto; }
+            .hero h1 { font-size: 3rem; }
+            .hero-stats { gap: 2rem; }
+            .main-nav { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="#" class="logo-container">
+            <div class="logo-icon">🔐</div>
+            Cairo Security
+        </a>
+        <nav class="main-nav">
+            <a href="#vulnerabilities-list">Vulnerabilities</a>
+            <a href="#patterns-list">Secure Patterns</a>
+            <a href="#audit-checklist">Audit Checklist</a>
+            <a href="#tools-list">Tools</a>
+        </nav>
+        <div class="header-right">
+            <a class="github-button" href="https://github.com/mariano-aguero/cairo-security-cheatsheet" data-icon="octicon-star" data-size="large" data-show-count="true" aria-label="Star mariano-aguero/cairo-security-cheatsheet on GitHub">Star on GitHub</a>
+            <script async defer src="https://buttons.github.io/buttons.js"></script>
+        </div>
+    </header>
+
+    <div class="container">
+        <aside id="sidebar">
+            <!-- Dynamic sidebar -->
+        </aside>
+
+        <main>
+            <section class="hero" id="getting-started">
+                <div class="hero-badge">
+                    <span>🛡️</span> Security Reference Guide
+                </div>
+                <h1>
+                    Cairo <span class="gradient">Security</span><br>Cheatsheet
+                </h1>
+                <p>
+                    A deep dive into Starknet security. Best practices, common vulnerabilities, and secure patterns for Cairo 1.x developers.
+                </p>
+                <div class="hero-stats">
+                    <div class="stat">
+                        <div class="stat-value">14</div>
+                        <div class="stat-label">Vulnerabilities</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">7</div>
+                        <div class="stat-label">Patterns</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">4</div>
+                        <div class="stat-label">Security Tools</div>
+                    </div>
+                </div>
+            </section>
+
+            <div id="getting-started-list">
+                <!-- Dynamic overview -->
+            </div>
+
+            <section id="vulnerabilities-list">
+                <div class="section-header">
+                    <h2><span class="icon">⚠️</span> Common Vulnerabilities</h2>
+                </div>
+                <!-- Dynamic cards -->
+            </section>
+
+            <section id="patterns-list">
+                <div class="section-header">
+                    <h2><span class="icon">🛡️</span> Secure Patterns</h2>
+                </div>
+                <!-- Dynamic patterns -->
+            </section>
+
+            <section id="audit-checklist">
+                <div class="section-header">
+                    <h2><span class="icon">✅</span> Security Audit Checklist</h2>
+                </div>
+                <div class="card">
+                    <p class="subtitle">Quick reference for code reviews and pre-deployment checks.</p>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; margin-top: 2rem;">
+                        <div class="checklist-category">
+                            <h4 style="color: var(--accent-primary); margin-bottom: 1rem; display: flex; align-items: center; gap: 8px;">
+                                <span>🏗️</span> Architecture
+                            </h4>
+                            <ul style="list-style: none; color: var(--text-secondary); font-size: 0.9rem;">
+                                <li style="margin-bottom: 0.5rem;">✅ CEI pattern followed in all functions?</li>
+                                <li style="margin-bottom: 0.5rem;">✅ Initializers protected against re-init?</li>
+                                <li style="margin-bottom: 0.5rem;">✅ Upgrade logic whitelisted/timelocked?</li>
+                                <li style="margin-bottom: 0.5rem;">✅ Component storage namespaces unique?</li>
+                            </ul>
+                        </div>
+                        <div class="checklist-category">
+                            <h4 style="color: var(--accent-secondary); margin-bottom: 1rem; display: flex; align-items: center; gap: 8px;">
+                                <span>🔢</span> Arithmetic
+                            </h4>
+                            <ul style="list-style: none; color: var(--text-secondary); font-size: 0.9rem;">
+                                <li style="margin-bottom: 0.5rem;">✅ No `felt252` used for balance logic?</li>
+                                <li style="margin-bottom: 0.5rem;">✅ Integer division precision handled?</li>
+                                <li style="margin-bottom: 0.5rem;">✅ Multiplication before division?</li>
+                                <li style="margin-bottom: 0.5rem;">✅ Safe integer types (u8-u256) used?</li>
+                            </ul>
+                        </div>
+                        <div class="checklist-category">
+                            <h4 style="color: var(--accent-warning); margin-bottom: 1rem; display: flex; align-items: center; gap: 8px;">
+                                <span>🔑</span> Access Control
+                            </h4>
+                            <ul style="list-style: none; color: var(--text-secondary); font-size: 0.9rem;">
+                                <li style="margin-bottom: 0.5rem;">✅ `get_caller_address()` not in constructor?</li>
+                                <li style="margin-bottom: 0.5rem;">✅ All admin functions restricted?</li>
+                                <li style="margin-bottom: 0.5rem;">✅ L1 handlers validate `from_address`?</li>
+                                <li style="margin-bottom: 0.5rem;">✅ Custom AA validates signatures?</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="tools-list">
+                <div class="section-header">
+                    <h2><span class="icon">🛠️</span> Security Tools</h2>
+                </div>
+                <!-- Dynamic tools -->
+            </section>
+        </main>
+    </div>
+
+    <footer>
+        <div class="footer-content">
+            <div class="footer-left">
+                <p>© 2026 Cairo Security Cheatsheet. Made with 🔐 for the Starknet community.</p>
+            </div>
+            <div class="footer-links">
+                <a href="https://github.com/mariano-aguero/cairo-security-cheatsheet" target="_blank">GitHub</a>
+                <a href="https://starknet.io" target="_blank">Starknet</a>
+                <a href="https://book.cairo-lang.org/" target="_blank">Cairo Book</a>
+            </div>
+        </div>
+    </footer>
+
+    <button id="back-to-top" title="Go to top">↑</button>
+
+    <script>
+        const sidebar = document.getElementById('sidebar');
+
+        function renderContent() {
+            // Render Overview
+            const overviewContainer = document.getElementById('getting-started-list');
+            let sidebarHtml = '<div class="nav-section"><div class="nav-title">Getting Started</div>';
+            sidebarHtml += `<a href="#${OVERVIEW.id}" class="nav-link"><span class="nav-icon">📖</span> ${OVERVIEW.title}</a>`;
+
+            const overviewCard = document.createElement('div');
+            overviewCard.className = 'card';
+            overviewCard.id = OVERVIEW.id;
+            let pointsHtml = '<ul style="margin-top: 1.5rem; padding-left: 1.5rem; color: var(--text-secondary);">';
+            OVERVIEW.points.forEach(p => { pointsHtml += `<li style="margin-bottom: 0.75rem;">${p}</li>`; });
+            pointsHtml += '</ul>';
+
+            overviewCard.innerHTML = `
+                <div class="card-header">
+                    <div>
+                        <div class="card-number">00</div>
+                        <h3>${OVERVIEW.title}</h3>
+                        <p class="subtitle">${OVERVIEW.subtitle}</p>
+                    </div>
+                </div>
+                <p>${OVERVIEW.description}</p>
+                ${pointsHtml}
+            `;
+            overviewContainer.appendChild(overviewCard);
+            sidebarHtml += '</div>';
+
+            // Render Vulnerabilities
+            const vulnContainer = document.getElementById('vulnerabilities-list');
+            sidebarHtml += '<div class="nav-section"><div class="nav-title">Vulnerabilities</div>';
+
+            const vulnIcons = ['💥', '🔑', '🔄', '📧', '🚀', '👤', '➗', '📢', '🔁', '⚖️', '👤', '📦', '🏗️', '🧂'];
+
+            VULNERABILITIES.forEach((v, idx) => {
+                const icon = vulnIcons[idx] || '⚠️';
+                sidebarHtml += `<a href="#${v.id}" class="nav-link"><span class="nav-icon">${icon}</span> ${v.title}</a>`;
+
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.id = v.id;
+
+                let examplesHtml = '<div class="code-container">';
+                v.examples.forEach(ex => {
+                    const isVulnerable = ex.label.includes('❌') || ex.label.includes('⚠️');
+                    examplesHtml += `
+                        <div class="code-block">
+                            <div class="code-header">
+                                <span class="code-label ${isVulnerable ? 'label-vulnerable' : 'label-secure'}">${ex.label}</span>
+                            </div>
+                            <pre><code class="language-cairo">${ex.code}</code></pre>
+                        </div>
+                    `;
+                });
+                examplesHtml += '</div>';
+
+                card.innerHTML = `
+                    <div class="card-header">
+                        <div>
+                            <div class="card-number">${v.number}</div>
+                            <h3>${v.title}</h3>
+                            <p class="subtitle">${v.subtitle}</p>
+                        </div>
+                        <span class="severity severity-${v.severity}">${v.severity}</span>
+                    </div>
+                    <p>${v.description}</p>
+                    <div class="impact-box">
+                        <strong>Impact:</strong> ${v.impact}
+                    </div>
+                    ${examplesHtml}
+                `;
+                vulnContainer.appendChild(card);
+            });
+            sidebarHtml += '</div>';
+
+            // Patterns
+            const patternContainer = document.getElementById('patterns-list');
+            sidebarHtml += '<div class="nav-section"><div class="nav-title">Security</div>';
+            sidebarHtml += `<a href="#patterns-list" class="nav-link"><span class="nav-icon">🛡️</span> Secure Patterns</a>`;
+            sidebarHtml += `<a href="#audit-checklist" class="nav-link"><span class="nav-icon">✅</span> Audit Checklist</a>`;
+            PATTERNS.forEach(p => {
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.id = p.id;
+                card.innerHTML = `<h3>${p.title}</h3><p style="margin-top: 1rem; color: var(--text-secondary);">${p.description}</p>`;
+                patternContainer.appendChild(card);
+            });
+
+            // Tools
+            const toolContainer = document.getElementById('tools-list');
+            sidebarHtml += `<a href="#tools-list" class="nav-link"><span class="nav-icon">🔧</span> Security Tools</a>`;
+            TOOLS.forEach(t => {
+                const toolId = t.name.toLowerCase().replace(/\s+/g, '-');
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.id = toolId;
+                card.innerHTML = `
+                    <h3><a href="${t.url}" target="_blank" style="color: var(--accent-primary); text-decoration: none;">${t.name}</a></h3>
+                    <p style="margin-top: 1rem; color: var(--text-secondary);">${t.description}</p>
+                    <a href="${t.url}" target="_blank" class="nav-link" style="margin-top: 1.5rem; display: inline-flex; border: 1px solid var(--border-color); width: auto; padding: 0.5rem 1rem;">
+                        View Documentation →
+                    </a>
+                `;
+                toolContainer.appendChild(card);
+            });
+            sidebarHtml += '</div>';
+
+            sidebar.innerHTML = sidebarHtml;
+        }
+
+        // Back to top logic
+        const backToTopButton = document.getElementById('back-to-top');
+
+        window.addEventListener('scroll', () => {
+            if (window.pageYOffset > 300) {
+                backToTopButton.style.display = 'flex';
+            } else {
+                backToTopButton.style.display = 'none';
+            }
+
+            let current = '';
+            const sections = document.querySelectorAll('section, .card');
+
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                if (pageYOffset >= sectionTop - 150) {
+                    current = section.getAttribute('id');
+                }
+            });
+
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+                if (link.getAttribute('href') === `#${current}`) {
+                    link.classList.add('active');
+                }
+            });
+        });
+
+        backToTopButton.addEventListener('click', () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+
+        renderContent();
+        hljs.highlightAll();
+    </script>
+</body>
+</html>

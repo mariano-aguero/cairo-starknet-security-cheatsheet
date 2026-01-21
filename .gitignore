@@ -1,0 +1,15 @@
+# Compiled Sierra files
+*.sierra.json
+*.casm.json
+
+# Scarb artifacts
+target/
+
+# Environment files
+.env
+
+# OS files
+.DS_Store
+Thmubs.db
+
+.idea
