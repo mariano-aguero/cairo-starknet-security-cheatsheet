@@ -1,5 +1,5 @@
 # 🔐 Cairo Security Cheatsheet
-[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live-00d4ff?style=for-the-badge&logo=github)](https://mariano-aguero.github.io/cairo-security-cheatsheet)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live-00d4ff?style=for-the-badge&logo=github)](https://mariano-aguero.github.io/cairo-starknet-security-cheatsheet/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 [![Contributing](https://img.shields.io/badge/Contributing-Welcome-00ff88?style=for-the-badge)](CONTRIBUTING.md)
 [![Cairo](https://img.shields.io/badge/Cairo-1.x-ff4b00?style=for-the-badge&logo=cairo)](https://book.cairo-lang.org/)
@@ -11,7 +11,7 @@
 A comprehensive, interactive security guide for Cairo 1.x and Starknet smart contract development. Learn about common vulnerabilities, security patterns, and best practices.
 
 ## 🌐 Live Demo
-**[View the Cheatsheet →](https://mariano-aguero.github.io/cairo-security-cheatsheet)**
+**[View the Cheatsheet →](https://mariano-aguero.github.io/cairo-starknet-security-cheatsheet/)**
 
 ## 📚 Contents
 
@@ -57,7 +57,7 @@ A comprehensive, interactive security guide for Cairo 1.x and Starknet smart con
 ## 🚀 Quick Start
 
 ### View Online
-Simply visit the [GitHub Pages site](https://mariano-aguero.github.io/cairo-security-cheatsheet).
+Simply visit the [GitHub Pages site](https://mariano-aguero.github.io/cairo-starknet-security-cheatsheet/).
 
 ### Run Locally
 ```bash
