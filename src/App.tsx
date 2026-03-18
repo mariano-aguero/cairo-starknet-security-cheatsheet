@@ -8,7 +8,7 @@ import { Sidebar } from './components/Sidebar'
 import { ThemeToggle } from './components/ThemeToggle'
 import { VulnerabilityCard } from './components/VulnerabilityCard'
 import { PatternCard } from './components/PatternCard'
-import { Github } from 'lucide-react'
+import { Github, Shield } from 'lucide-react'
 
 function getInitialTheme(): boolean {
   const stored = localStorage.getItem('theme')
@@ -62,7 +62,7 @@ export default function App() {
       {/* Header */}
       <header style={headerStyle} className="no-print">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span style={{ fontSize: '1.25rem' }}>🔐</span>
+          <Shield size={16} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
           <div>
             <div style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-primary)' }}>
               Cairo Security Cheatsheet
@@ -140,7 +140,7 @@ export default function App() {
             >
               Cairo Security Cheatsheet
             </h2>
-            <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '1.5rem', maxWidth: '40rem' }}>
+            <p style={{ fontSize: '1rem', color: 'var(--text-secondary)', marginBottom: '1.5rem', maxWidth: '40rem' }}>
               A comprehensive, interactive reference for Cairo 2.x and Starknet smart contract security.
               22 vulnerabilities, 7 secure patterns, and an audit checklist — all with real Cairo code examples.
             </p>
@@ -162,7 +162,7 @@ export default function App() {
                   <h3 style={{ fontWeight: 700, fontSize: '0.875rem', color: 'var(--accent-primary)', marginBottom: '0.375rem' }}>
                     {title}
                   </h3>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{body}</p>
+                  <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{body}</p>
                 </div>
               ))}
             </div>
@@ -219,12 +219,9 @@ export default function App() {
                       fontSize: '0.875rem',
                       color: 'var(--text-primary)',
                       marginBottom: '0.75rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
                     }}
                   >
-                    <span>{category.icon}</span> {category.title}
+                    {category.title}
                   </h3>
                   <ul style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', listStyle: 'none' }}>
                     {category.items.map((item, i) => (
@@ -234,12 +231,23 @@ export default function App() {
                           display: 'flex',
                           alignItems: 'flex-start',
                           gap: '0.5rem',
-                          fontSize: '0.8rem',
+                          fontSize: '0.875rem',
                           color: 'var(--text-secondary)',
                           lineHeight: 1.5,
                         }}
                       >
-                        <span style={{ color: '#4ade80', flexShrink: 0, marginTop: '0.1rem' }}>☐</span>
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            display: 'inline-block',
+                            width: '12px',
+                            height: '12px',
+                            border: '1.5px solid rgba(74, 222, 128, 0.45)',
+                            borderRadius: '2px',
+                            flexShrink: 0,
+                            marginTop: '2px',
+                          }}
+                        />
                         {item}
                       </li>
                     ))}
@@ -271,13 +279,12 @@ export default function App() {
                   onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.borderColor = 'rgba(0,212,255,0.4)')}
                   onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.borderColor = 'var(--border-color)')}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                    <span>{tool.icon}</span>
+                  <div style={{ marginBottom: '0.375rem' }}>
                     <span style={{ fontWeight: 700, fontSize: '0.875rem', color: 'var(--accent-primary)' }}>
                       {tool.name}
                     </span>
                   </div>
-                  <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                     {tool.description}
                   </p>
                 </a>
@@ -292,7 +299,7 @@ export default function App() {
               textAlign: 'center',
               padding: '2rem 0',
               borderTop: '1px solid var(--border-color)',
-              fontSize: '0.78rem',
+              fontSize: '0.8125rem',
               color: 'var(--text-muted)',
             }}
           >

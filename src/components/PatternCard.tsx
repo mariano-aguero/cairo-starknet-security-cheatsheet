@@ -20,13 +20,10 @@ export function PatternCard({ pattern, isDark }: PatternCardProps) {
         transition: 'background 0.2s',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-        <span style={{ fontSize: '1.5rem' }}>{pattern.icon}</span>
-        <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-          {pattern.title}
-        </h3>
-      </div>
-      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+      <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.75rem' }}>
+        {pattern.title}
+      </h3>
+      <p style={{ fontSize: '0.9375rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
         {pattern.description}
       </p>
       {pattern.examples && pattern.examples.length > 0 && (

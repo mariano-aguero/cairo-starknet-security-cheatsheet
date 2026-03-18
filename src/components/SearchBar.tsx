@@ -18,7 +18,7 @@ export function SearchBar({ value, onChange }: SearchBarProps) {
           width: '100%',
           padding: '0.5rem 2rem 0.5rem 0.75rem',
           borderRadius: '0.5rem',
-          fontSize: '0.8rem',
+          fontSize: '0.875rem',
           outline: 'none',
           background: 'var(--bg-tertiary)',
           color: 'var(--text-primary)',
